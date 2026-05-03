@@ -1,0 +1,3 @@
+deltabot-cli
+python-dotenv
+yt-dlp[default]
