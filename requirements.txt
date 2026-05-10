@@ -1,3 +1,4 @@
 deltabot-cli
 python-dotenv
 yt-dlp[default]
+bgutil-ytdlp-pot-provider

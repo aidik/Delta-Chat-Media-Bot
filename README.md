@@ -91,6 +91,9 @@ Open the link in Delta Chat to add the bot as a contact. Then send it a YouTube
 | `MAX_HEIGHT`      | No       | *(unset = true best)* | Max video height (e.g. `1080`, `2160`)                                |
 | `SUBTITLE_LANGS`  | No       | `en`                 | Comma-separated subtitle languages to embed as soft tracks (no auto subs) |
 | `JOB_TIMEOUT`     | No       | `14400`              | Per-job timeout in seconds                                             |
+| `YT_EXTRACTOR_ARGS` | No     | `youtube:player_client=default,tv,web_safari` | Passed to `yt-dlp --extractor-args`. Try alternate player clients to dodge YouTube "Sign in to confirm you're not a bot" errors. Empty = yt-dlp defaults. |
+| `BGUTIL_POT_PROVIDER_URL` | No | *(unset)*       | URL of a [bgutil PO Token provider](#optional-po-token-provider-for-youtube) sidecar (e.g. `http://bgutil-provider:4416`). Empty = plugin idle. |
+| `COOKIES_FILE`    | No       | *(unset)*            | In-container path to a Netscape-format cookies file. Needed for YouTube `LOGIN_REQUIRED` content. See [Optional: Cookies](#optional-cookies-for-login-required-content). |
 
 ## Usage
 
@@ -121,6 +124,122 @@ If you run `deltabot.py` outside Docker, install Deno yourself
 ([instructions](https://docs.deno.com/runtime/getting_started/installation/)) and make sure it's on
 `PATH`. See the [yt-dlp EJS wiki](https://github.com/yt-dlp/yt-dlp/wiki/EJS) for alternative
 runtimes (Node, Bun, QuickJS).
+
+## YouTube bot-detection notes
+
+YouTube increasingly responds to unauthenticated requests with `Sign in to confirm
+you're not a bot`. The bot defaults to `--extractor-args
+youtube:player_client=default,tv,web_safari`, which tries alternate player clients
+that often slip past the challenge. When YouTube clamps down on the current set,
+tune `YT_EXTRACTOR_ARGS` — the [yt-dlp youtube extractor docs](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#youtube)
+list current client names. If alternate clients stop working, the next-cheapest
+mitigation is the [PO Token provider plugin](https://github.com/Brainicism/bgutil-ytdlp-pot-provider);
+`--cookies` is the most reliable but requires maintaining a YouTube account.
+
+Keeping `yt-dlp` itself fresh also matters — `requirements.txt` pins `yt-dlp[default]`
+unpinned, so a periodic image rebuild picks up upstream extractor fixes. The bundled
+[`.github/workflows/rebuild.yml`](.github/workflows/rebuild.yml) does this weekly when
+configured with Docker Hub credentials.
+
+## Optional: PO Token provider for YouTube
+
+When `--extractor-args` tweaks stop working, the next-cheapest mitigation is running
+the [`bgutil-ytdlp-pot-provider`](https://github.com/Brainicism/bgutil-ytdlp-pot-provider)
+sidecar. It mints YouTube **Proof-of-Origin** tokens that yt-dlp attaches to each
+request, which is what YouTube's bot challenge actually wants. The bot's image already
+ships the matching pip plugin — it stays inert until you point it at a provider.
+
+### 1. Run the provider container
+
+```bash
+docker run -d --name bgutil-provider --init --restart unless-stopped \
+  brainicism/bgutil-ytdlp-pot-provider
+```
+
+The provider listens on port `4416` inside the container. If you publish it to the
+host with `-p 4416:4416`, any yt-dlp on the same host can use it.
+
+### 2. Make the bot reach it
+
+The bot container must be able to resolve and connect to the provider:
+
+- **Same Docker network** (recommended). Create a user-defined bridge once
+  (`docker network create media-bot`) and start both containers with
+  `--network media-bot`. Inside, the bot reaches the provider at
+  `http://bgutil-provider:4416`.
+- **Host networking / published port.** If the provider publishes `4416` to the
+  host, point the bot at `http://<docker-host-ip>:4416` (not `127.0.0.1`, which
+  resolves *inside* the bot container).
+
+### 3. Tell the bot to use it
+
+Set in `.env`:
+
+```
+BGUTIL_POT_PROVIDER_URL=http://bgutil-provider:4416
+```
+
+…or pass `-e BGUTIL_POT_PROVIDER_URL=...` to `docker run`. On the next download the
+bot will append `--extractor-args youtubepot-bgutilhttp:base_url=<your URL>` to
+yt-dlp. Leaving the variable unset keeps the plugin dormant — it's a pure opt-in.
+
+## Optional: Cookies for login-required content
+
+PO Tokens solve YouTube's *bot challenge*. They do **not** solve `LOGIN_REQUIRED`
+— a separate, increasingly common YouTube response (notably for Shorts,
+age-restricted, region-locked, and embedded content) where YouTube simply demands
+an authenticated session before returning any player data. yt-dlp surfaces both
+errors with the misleading "Sign in to confirm you're not a bot" message; only
+cookies fix the second one.
+
+**Risk note.** A Google account whose cookies are exported to `yt-dlp` *can* get
+flagged for unusual activity. At hobby volumes (a few downloads a day, with the
+PO Token sidecar minimising chatter) it's typically fine for long stretches, but
+expect occasional re-pairing. Don't use cookies from an account you can't afford
+to have temporarily restricted.
+
+### 1. Export cookies from a logged-in browser
+
+Easiest path is the [*Get cookies.txt LOCALLY*](https://addons.mozilla.org/firefox/addon/cookies-txt/)
+browser extension (Firefox or Chromium). Log into YouTube, open the extension on
+`youtube.com`, click *Export As → cookies.txt* — that's a Netscape-format file
+yt-dlp accepts directly.
+
+### 2. Place it where the container can read it
+
+```bash
+mkdir -p /mnt/configs/yt-cookies
+mv ~/Downloads/cookies.txt /mnt/configs/yt-cookies/yt-cookies.txt
+sudo chown 1000:1000 /mnt/configs/yt-cookies/yt-cookies.txt
+sudo chmod 600 /mnt/configs/yt-cookies/yt-cookies.txt
+```
+
+The file must be readable by uid `1000` (the in-container `bot` user). `chmod
+600` is enough since uid matches; the cookies are sensitive — treat the file as
+secret.
+
+### 3. Bind-mount and point the bot at it
+
+Add to `docker run`:
+
+```
+-v /mnt/configs/yt-cookies/yt-cookies.txt:/cookies/yt-cookies.txt:ro \
+-e COOKIES_FILE=/cookies/yt-cookies.txt \
+```
+
+(`:ro` keeps yt-dlp from rewriting the file with refreshed cookies; this is
+fine for the static-export workflow above. If you ever switch to a strategy
+where you want yt-dlp to refresh the cookies, drop `:ro`.)
+
+On TrueNAS Apps, do the equivalent: a host-path volume pointing at the cookies
+file mounted at `/cookies/yt-cookies.txt`, plus `COOKIES_FILE` in the
+environment.
+
+### 4. Re-pairing
+
+When YouTube invalidates the session (you'll see `LOGIN_REQUIRED` come back even
+on previously-working URLs), repeat step 1 and overwrite the file. No bot
+restart required — yt-dlp re-reads the file on every invocation.
 
 ## Plex / Jellyfin setup tip
 

@@ -31,6 +31,24 @@ AUDIO_DIR = os.getenv("AUDIO_DIR", "/downloads-audio")
 MAX_HEIGHT = os.getenv("MAX_HEIGHT", "").strip()
 SUBTITLE_LANGS = os.getenv("SUBTITLE_LANGS", "en").strip()
 JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "14400"))
+YT_EXTRACTOR_ARGS = os.getenv(
+    "YT_EXTRACTOR_ARGS",
+    "youtube:player_client=default,tv,web_safari",
+).strip()
+BGUTIL_POT_PROVIDER_URL = os.getenv("BGUTIL_POT_PROVIDER_URL", "").strip()
+COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
+
+
+def yt_extractor_flags() -> list[str]:
+    flags: list[str] = []
+    if YT_EXTRACTOR_ARGS:
+        flags += ["--extractor-args", YT_EXTRACTOR_ARGS]
+    if BGUTIL_POT_PROVIDER_URL:
+        flags += [
+            "--extractor-args",
+            f"youtubepot-bgutilhttp:base_url={BGUTIL_POT_PROVIDER_URL}",
+        ]
+    return flags
 
 VIDEO_ARCHIVE = os.path.join(DOWNLOAD_DIR, ".yt-dlp-archive.txt")
 AUDIO_ARCHIVE = os.path.join(AUDIO_DIR, ".yt-dlp-archive.txt")
@@ -116,18 +134,21 @@ def build_video_args(url: str) -> list[str]:
         "--print", "after_move:filepath",
         "--newline",
     ]
+    if COOKIES_FILE:
+        args += ["--cookies", COOKIES_FILE]
     if SUBTITLE_LANGS:
         args += [
             "--embed-subs",
             "--sub-langs", SUBTITLE_LANGS,
             "--convert-subs", "srt",
         ]
+    args += yt_extractor_flags()
     args += ["--", url]
     return args
 
 
 def build_audio_args(url: str) -> list[str]:
-    return [
+    args = [
         "yt-dlp",
         "--no-playlist",
         "--no-overwrites",
@@ -143,8 +164,12 @@ def build_audio_args(url: str) -> list[str]:
         "--trim-filenames", "200",
         "--print", "after_move:filepath",
         "--newline",
-        "--", url,
     ]
+    if COOKIES_FILE:
+        args += ["--cookies", COOKIES_FILE]
+    args += yt_extractor_flags()
+    args += ["--", url]
+    return args
 
 
 def parse_after_move_filepath(stdout: str) -> Optional[str]:
@@ -317,6 +342,11 @@ def startup_checks() -> None:
         sys.exit(1)
     if not shutil.which("ffmpeg"):
         logger.warning("ffmpeg not found in PATH - muxing/audio extraction will fail")
+    if COOKIES_FILE and not os.path.isfile(COOKIES_FILE):
+        logger.warning(
+            f"COOKIES_FILE={COOKIES_FILE} does not exist or is not readable - "
+            "yt-dlp will fail any download that needs cookies"
+        )
     os.makedirs(DOWNLOAD_DIR, exist_ok=True)
     os.makedirs(AUDIO_DIR, exist_ok=True)
 
@@ -327,5 +357,8 @@ if __name__ == "__main__":
         logger.info(f"Starting bot. Responding to: {RESPOND_TO}")
         logger.info(f"Video dir: {DOWNLOAD_DIR}  Audio dir: {AUDIO_DIR}")
         logger.info(f"MAX_HEIGHT={MAX_HEIGHT or '(unset, true best)'}  SUBTITLE_LANGS={SUBTITLE_LANGS}")
+        logger.info(f"YT_EXTRACTOR_ARGS={YT_EXTRACTOR_ARGS or '(unset)'}")
+        logger.info(f"BGUTIL_POT_PROVIDER_URL={BGUTIL_POT_PROVIDER_URL or '(unset, PO Token plugin idle)'}")
+        logger.info(f"COOKIES_FILE={COOKIES_FILE or '(unset)'}")
         threading.Thread(target=worker_loop, daemon=True).start()
     cli.start()
