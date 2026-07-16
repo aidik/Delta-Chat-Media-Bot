@@ -26,11 +26,11 @@ VOLUME ["/downloads", "/downloads-audio", "/dcconfig"]
 
 CMD ["sh", "-c", "\
   if [ ! -f /dcconfig/.initialized ]; then \
-    python deltabot.py init --config-dir /dcconfig 'DCACCOUNT:https://nine.testrun.org/new' && \
-    python deltabot.py config --config-dir /dcconfig displayname 'Delta Media Bot' && \
-    python deltabot.py config --config-dir /dcconfig selfstatus 'Send me a video URL and I will save it to your media library.' && \
-    python deltabot.py config --config-dir /dcconfig selfavatar './bot-avatar.jpg' && \
+    python deltabot.py --config-dir /dcconfig init 'DCACCOUNT:https://nine.testrun.org/new' && \
+    python deltabot.py --config-dir /dcconfig config displayname 'Delta Media Bot' && \
+    python deltabot.py --config-dir /dcconfig config selfstatus 'Send me a video URL and I will save it to your media library.' && \
+    python deltabot.py --config-dir /dcconfig config selfavatar './bot-avatar.jpg' && \
     touch /dcconfig/.initialized; \
   fi && \
-  python deltabot.py link --config-dir /dcconfig && \
-  python deltabot.py serve --config-dir /dcconfig"]
+  python deltabot.py --config-dir /dcconfig link && \
+  python deltabot.py --config-dir /dcconfig serve"]
