@@ -11,7 +11,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from deltabot_cli import BotCli
-from deltachat2 import MsgData, events
+from deltachat2 import MessageData, events
 from dotenv import load_dotenv
 
 logging.basicConfig(level=logging.INFO)
@@ -106,7 +106,7 @@ def human_size(num_bytes: int) -> str:
 
 def send(bot, accid: int, chat_id: int, text: str) -> None:
     try:
-        bot.rpc.send_msg(accid, chat_id, MsgData(text=text))
+        bot.rpc.send_msg(accid, chat_id, MessageData(text=text))
     except Exception as e:
         logger.error(f"Failed to send message: {e}")
 
