@@ -121,11 +121,13 @@ def build_video_args(url: str) -> list[str]:
 
     args = [
         "yt-dlp",
+        "-v",
         "--no-playlist",
         "--no-overwrites",
         "--restrict-filenames",
         "--download-archive", VIDEO_ARCHIVE,
         "-f", fmt,
+        "-S", "res,fps,vcodec:vp09,br",
         "--merge-output-format", "mp4",
         "--embed-metadata",
         "--embed-thumbnail",
