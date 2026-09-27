@@ -91,9 +91,9 @@ Open the link in Delta Chat to add the bot as a contact. Then send it a YouTube
 | `MAX_HEIGHT`      | No       | *(unset = true best)* | Max video height (e.g. `1080`, `2160`)                                |
 | `SUBTITLE_LANGS`  | No       | `en`                 | Comma-separated subtitle languages to embed as soft tracks (no auto subs) |
 | `JOB_TIMEOUT`     | No       | `14400`              | Per-job timeout in seconds                                             |
-| `YT_EXTRACTOR_ARGS` | No     | `youtube:player_client=default,tv,web_safari` | Passed to `yt-dlp --extractor-args`. Try alternate player clients to dodge YouTube "Sign in to confirm you're not a bot" errors. Empty = yt-dlp defaults. |
+| `YT_EXTRACTOR_ARGS` | No     | *(unset = yt-dlp defaults)* | Passed to `yt-dlp --extractor-args`. Set e.g. `youtube:player_client=default,tv,web_safari` to try alternate player clients if the defaults stop working. |
 | `BGUTIL_POT_PROVIDER_URL` | No | *(unset)*       | URL of a [bgutil PO Token provider](#optional-po-token-provider-for-youtube) sidecar (e.g. `http://bgutil-provider:4416`). Empty = plugin idle. |
-| `COOKIES_FILE`    | No       | *(unset)*            | In-container path to a Netscape-format cookies file. Needed for YouTube `LOGIN_REQUIRED` content. See [Optional: Cookies](#optional-cookies-for-login-required-content). |
+| `COOKIES_FILE`    | No       | *(unset)*            | In-container path to a Netscape-format cookies file. Used only as a retry when a download fails with a login-type error. See [Optional: Cookies](#optional-cookies-for-login-required-content). |
 
 ## Usage
 
@@ -128,13 +128,13 @@ runtimes (Node, Bun, QuickJS).
 ## YouTube bot-detection notes
 
 YouTube increasingly responds to unauthenticated requests with `Sign in to confirm
-you're not a bot`. The bot defaults to `--extractor-args
-youtube:player_client=default,tv,web_safari`, which tries alternate player clients
-that often slip past the challenge. When YouTube clamps down on the current set,
-tune `YT_EXTRACTOR_ARGS` — the [yt-dlp youtube extractor docs](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#youtube)
-list current client names. If alternate clients stop working, the next-cheapest
-mitigation is the [PO Token provider plugin](https://github.com/Brainicism/bgutil-ytdlp-pot-provider);
-`--cookies` is the most reliable but requires maintaining a YouTube account.
+you're not a bot`. By default the bot lets yt-dlp choose its own player clients,
+which upstream retunes as YouTube changes. If they stop working, set
+`YT_EXTRACTOR_ARGS` to try alternate clients — the [yt-dlp youtube extractor docs](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#youtube)
+list current client names. The next-cheapest mitigation is the
+[PO Token provider plugin](https://github.com/Brainicism/bgutil-ytdlp-pot-provider).
+Cookies are the last resort: the bot only uses them to retry a download that
+failed with a login-type error (see below).
 
 Keeping `yt-dlp` itself fresh also matters — `requirements.txt` pins `yt-dlp[default]`
 unpinned, so a periodic image rebuild picks up upstream extractor fixes. The bundled
@@ -191,6 +191,15 @@ age-restricted, region-locked, and embedded content) where YouTube simply demand
 an authenticated session before returning any player data. yt-dlp surfaces both
 errors with the misleading "Sign in to confirm you're not a bot" message; only
 cookies fix the second one.
+
+**Cookies are a fallback, not a default.** A logged-in session makes yt-dlp use
+different player clients, and YouTube often limits those to its "SABR-only" mode,
+so a video available up to 2160p anonymously may show only one 360p format when
+logged in (the PO Token provider doesn't change this). The bot therefore tries
+every download without cookies first. If that fails with a login-type error
+(`LOGIN_REQUIRED`, "Sign in to confirm", age-restricted, private, members-only),
+it replies `login required, retrying with cookies` and runs yt-dlp once more
+with `--cookies`.
 
 **Risk note.** A Google account whose cookies are exported to `yt-dlp` *can* get
 flagged for unusual activity. At hobby volumes (a few downloads a day, with the

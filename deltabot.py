@@ -31,10 +31,7 @@ AUDIO_DIR = os.getenv("AUDIO_DIR", "/downloads-audio")
 MAX_HEIGHT = os.getenv("MAX_HEIGHT", "").strip()
 SUBTITLE_LANGS = os.getenv("SUBTITLE_LANGS", "en").strip()
 JOB_TIMEOUT = int(os.getenv("JOB_TIMEOUT", "14400"))
-YT_EXTRACTOR_ARGS = os.getenv(
-    "YT_EXTRACTOR_ARGS",
-    "youtube:player_client=default,tv,web_safari",
-).strip()
+YT_EXTRACTOR_ARGS = os.getenv("YT_EXTRACTOR_ARGS", "").strip()
 BGUTIL_POT_PROVIDER_URL = os.getenv("BGUTIL_POT_PROVIDER_URL", "").strip()
 COOKIES_FILE = os.getenv("COOKIES_FILE", "").strip()
 
@@ -54,6 +51,15 @@ VIDEO_ARCHIVE = os.path.join(DOWNLOAD_DIR, ".yt-dlp-archive.txt")
 AUDIO_ARCHIVE = os.path.join(AUDIO_DIR, ".yt-dlp-archive.txt")
 
 URL_REGEX = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+
+# yt-dlp ERROR lines that mean "an authenticated session would help". Only these
+# trigger a retry with cookies - a logged-in session gets YouTube's SABR-only
+# treatment (360p muxed format only), so cookies are a last resort, not a default.
+LOGIN_ERROR_REGEX = re.compile(
+    r"sign in to confirm|login_required|--cookies|age.restricted|"
+    r"inappropriate for some users|members.only|private video|video is private",
+    re.IGNORECASE,
+)
 
 cli = BotCli("mediabot")
 
@@ -111,7 +117,7 @@ def send(bot, accid: int, chat_id: int, text: str) -> None:
         logger.error(f"Failed to send message: {e}")
 
 
-def build_video_args(url: str) -> list[str]:
+def build_video_args(url: str, use_cookies: bool) -> list[str]:
     if MAX_HEIGHT:
         fmt = (
             f"bv*[height<={MAX_HEIGHT}]+ba/b[height<={MAX_HEIGHT}]/bv*+ba/b"
@@ -136,7 +142,7 @@ def build_video_args(url: str) -> list[str]:
         "--print", "after_move:filepath",
         "--newline",
     ]
-    if COOKIES_FILE:
+    if use_cookies:
         args += ["--cookies", COOKIES_FILE]
     if SUBTITLE_LANGS:
         args += [
@@ -149,7 +155,7 @@ def build_video_args(url: str) -> list[str]:
     return args
 
 
-def build_audio_args(url: str) -> list[str]:
+def build_audio_args(url: str, use_cookies: bool) -> list[str]:
     args = [
         "yt-dlp",
         "--no-playlist",
@@ -167,11 +173,20 @@ def build_audio_args(url: str) -> list[str]:
         "--print", "after_move:filepath",
         "--newline",
     ]
-    if COOKIES_FILE:
+    if use_cookies:
         args += ["--cookies", COOKIES_FILE]
     args += yt_extractor_flags()
     args += ["--", url]
     return args
+
+
+def needs_login(stderr: str) -> bool:
+    # Match ERROR lines only: with -v, stderr also echoes the full command line.
+    return any(
+        LOGIN_ERROR_REGEX.search(line)
+        for line in stderr.splitlines()
+        if line.startswith("ERROR:")
+    )
 
 
 def parse_after_move_filepath(stdout: str) -> Optional[str]:
@@ -190,6 +205,18 @@ def truncate_stderr(stderr: str, limit: int = 1500) -> str:
     return tail or "(no error output)"
 
 
+def run_ytdlp(args: list[str]) -> subprocess.CompletedProcess:
+    logger.info(f"Running yt-dlp: {args}")
+    return subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        timeout=JOB_TIMEOUT,
+        shell=False,
+        check=False,
+    )
+
+
 def run_job(bot, job: Job) -> None:
     send(
         bot,
@@ -198,22 +225,14 @@ def run_job(bot, job: Job) -> None:
         f"downloading ({job.index}/{job.total}) [{job.mode}]: {job.url}",
     )
 
-    if job.mode == "audio":
-        args = build_audio_args(job.url)
-    else:
-        args = build_video_args(job.url)
-
-    logger.info(f"Running yt-dlp: {args}")
+    build_args = build_audio_args if job.mode == "audio" else build_video_args
 
     try:
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=JOB_TIMEOUT,
-            shell=False,
-            check=False,
-        )
+        # Anonymous first: it gets the full format list. Cookies only on login errors.
+        proc = run_ytdlp(build_args(job.url, use_cookies=False))
+        if proc.returncode != 0 and COOKIES_FILE and needs_login(proc.stderr or ""):
+            send(bot, job.accid, job.chat_id, f"login required, retrying with cookies: {job.url}")
+            proc = run_ytdlp(build_args(job.url, use_cookies=True))
     except subprocess.TimeoutExpired:
         send(
             bot,
@@ -359,7 +378,7 @@ if __name__ == "__main__":
         logger.info(f"Starting bot. Responding to: {RESPOND_TO}")
         logger.info(f"Video dir: {DOWNLOAD_DIR}  Audio dir: {AUDIO_DIR}")
         logger.info(f"MAX_HEIGHT={MAX_HEIGHT or '(unset, true best)'}  SUBTITLE_LANGS={SUBTITLE_LANGS}")
-        logger.info(f"YT_EXTRACTOR_ARGS={YT_EXTRACTOR_ARGS or '(unset)'}")
+        logger.info(f"YT_EXTRACTOR_ARGS={YT_EXTRACTOR_ARGS or '(unset, yt-dlp default clients)'}")
         logger.info(f"BGUTIL_POT_PROVIDER_URL={BGUTIL_POT_PROVIDER_URL or '(unset, PO Token plugin idle)'}")
         logger.info(f"COOKIES_FILE={COOKIES_FILE or '(unset)'}")
         threading.Thread(target=worker_loop, daemon=True).start()
